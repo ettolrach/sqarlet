@@ -1,4 +1,7 @@
-use crate::{parse::Position, types::{Field, Id, Type}};
+use crate::{
+    parse::Position,
+    types::{Field, Id, Type},
+};
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -10,7 +13,7 @@ pub struct Expr {
 pub enum ExprKind {
     Fv(Id),
     /// Variable declaration, aka. let binding.
-    /// 
+    ///
     /// Note: the reference is contradictory and on the one hand specifies that a variable
     /// declaration must be initialised using a value, but then shows examples of it being
     /// initialised with an expression. I will assume that you can initialise a variable with an
