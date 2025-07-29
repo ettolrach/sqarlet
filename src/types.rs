@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::expr::Literal;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Id(String);
 
@@ -80,6 +82,39 @@ impl Display for Type {
             // Type::Class(id) => write!(f, "{id} (CLASS)"),
             Type::Function(from, to) => write!(f, "FUNCTION ({}) RETURNS {to}", print_types(from)),
             Type::NumOrString => write!(f, "INTEGER, REAL, OR STRING"),
+        }
+    }
+}
+
+impl From<Literal> for Type {
+    fn from(value: Literal) -> Self {
+        match value {
+            Literal::Integer(_) => Self::Integer,
+            Literal::Real(_) => Self::Real,
+            Literal::Boolean(_) => Self::Boolean,
+            Literal::Character(_) => Self::Character,
+        }
+    }
+}
+
+impl From<&Literal> for Type {
+    fn from(value: &Literal) -> Self {
+        match value {
+            Literal::Integer(_) => Self::Integer,
+            Literal::Real(_) => Self::Real,
+            Literal::Boolean(_) => Self::Boolean,
+            Literal::Character(_) => Self::Character,
+        }
+    }
+}
+
+impl From<&Literal> for &Type {
+    fn from(value: &Literal) -> Self {
+        match value {
+            Literal::Integer(_) => &Type::Integer,
+            Literal::Real(_) => &Type::Real,
+            Literal::Boolean(_) => &Type::Boolean,
+            Literal::Character(_) => &Type::Character,
         }
     }
 }
