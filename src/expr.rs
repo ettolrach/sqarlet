@@ -7,14 +7,25 @@ use crate::{
 
 #[derive(Debug, Clone, Copy)]
 pub enum Literal {
-    /// Integer, [`u64`] in this implementation.
-    Integer(u64),
+    /// Integer, [`i64`] in this implementation.
+    Integer(i64),
     /// Real, [`f64`] in this implementation.
     Real(f64),
     /// Boolean
     Boolean(bool),
     /// Character, here [`char`].
     Character(char),
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Integer(x) => write!(f, "{x}"),
+            Literal::Real(x) => write!(f, "{x}"),
+            Literal::Boolean(b) => write!(f, "{b}"),
+            Literal::Character(c) => write!(f, "{c}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

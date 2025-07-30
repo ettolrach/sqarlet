@@ -1,6 +1,7 @@
 mod codegen;
 mod expr;
 mod parse;
+mod prelude;
 mod typechecking;
 mod types;
 

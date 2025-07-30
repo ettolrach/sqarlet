@@ -144,6 +144,8 @@ fn check<'a>(expr: &'a Expr, context: &'a mut HashMap<Id, Type>) -> Result<&'a T
             Ok(&Type::Unit)
         }
         ExprKind::BinOp(lhs, op, rhs) => {
+            // We have to do some weird checking since we need to support the unspecified type of a
+            // STDIN input.
             let (lhs_type, rhs_type) = op.arg_types();
             let actual_lhs_type = check(lhs, context)?;
             let lhs_is_num_or_string = actual_lhs_type == &Type::NumOrString;

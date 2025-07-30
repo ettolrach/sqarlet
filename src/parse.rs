@@ -2,8 +2,8 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
-    pub line: u64,
-    pub column: u64,
+    pub line: i64,
+    pub column: i64,
 }
 
 impl Display for Position {

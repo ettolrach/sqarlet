@@ -86,28 +86,6 @@ impl Display for Type {
     }
 }
 
-impl From<Literal> for Type {
-    fn from(value: Literal) -> Self {
-        match value {
-            Literal::Integer(_) => Self::Integer,
-            Literal::Real(_) => Self::Real,
-            Literal::Boolean(_) => Self::Boolean,
-            Literal::Character(_) => Self::Character,
-        }
-    }
-}
-
-impl From<&Literal> for Type {
-    fn from(value: &Literal) -> Self {
-        match value {
-            Literal::Integer(_) => Self::Integer,
-            Literal::Real(_) => Self::Real,
-            Literal::Boolean(_) => Self::Boolean,
-            Literal::Character(_) => Self::Character,
-        }
-    }
-}
-
 impl From<&Literal> for &Type {
     fn from(value: &Literal) -> Self {
         match value {
@@ -115,6 +93,23 @@ impl From<&Literal> for &Type {
             Literal::Real(_) => &Type::Real,
             Literal::Boolean(_) => &Type::Boolean,
             Literal::Character(_) => &Type::Character,
+        }
+    }
+}
+
+impl Type {
+    pub fn rust_type(&self) -> String {
+        match self {
+            Type::Ftv(id) => id.to_string(),
+            Type::Unit => String::from("()"),
+            Type::Integer => String::from("i64"),
+            Type::Real => String::from("f64"),
+            Type::Boolean => String::from("bool"),
+            Type::Character => String::from("char"),
+            Type::Array(ty) => format!("Rc<RefCell<Vec<{ty}>>>"),
+            Type::Record(id, _) => id.to_string(),
+            Type::Function(_, _) => unimplemented!("Should never be called."),
+            Type::NumOrString => String::from("NumOrString"),
         }
     }
 }
