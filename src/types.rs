@@ -48,6 +48,12 @@ fn print_fields(fields: &[Field]) -> String {
     to_return
 }
 
+enum VarType {
+    NumOrString,
+    RcRef,
+    Stack,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     /// A free type variable. Since there are no generics, this will always be the ID of a record
@@ -65,7 +71,8 @@ pub enum Type {
     // Class(Id),
     /// A function with the types of the parameters and the output type.
     Function(Vec<Type>, Box<Type>),
-    NumOrString,
+    /// An indeterminate type from a `RECEIVE id FROM <source>` expression.
+    Indeterminate,
 }
 
 impl Display for Type {
@@ -81,19 +88,25 @@ impl Display for Type {
             Type::Record(id, fields) => write!(f, "{id} {{ {} }}", print_fields(fields)),
             // Type::Class(id) => write!(f, "{id} (CLASS)"),
             Type::Function(from, to) => write!(f, "FUNCTION ({}) RETURNS {to}", print_types(from)),
-            Type::NumOrString => write!(f, "INTEGER, REAL, OR STRING"),
+            Type::Indeterminate => write!(f, "INDETERMINATE TYPE"),
         }
     }
 }
 
-impl From<&Literal> for &Type {
+impl From<&Literal> for Type {
     fn from(value: &Literal) -> Self {
         match value {
-            Literal::Integer(_) => &Type::Integer,
-            Literal::Real(_) => &Type::Real,
-            Literal::Boolean(_) => &Type::Boolean,
-            Literal::Character(_) => &Type::Character,
+            Literal::Integer(_) => Type::Integer,
+            Literal::Real(_) => Type::Real,
+            Literal::Boolean(_) => Type::Boolean,
+            Literal::Character(_) => Type::Character,
         }
+    }
+}
+
+impl From<Literal> for Type {
+    fn from(value: Literal) -> Self {
+        (&value).into()
     }
 }
 
@@ -109,17 +122,70 @@ impl Type {
             Type::Array(ty) => format!("Rc<RefCell<Vec<{ty}>>>"),
             Type::Record(id, _) => id.to_string(),
             Type::Function(_, _) => unimplemented!("Should never be called."),
-            Type::NumOrString => String::from("NumOrString"),
+            Type::Indeterminate => String::from("_"),
         }
     }
 }
 
+impl From<Type> for VarType {
+    fn from(value: Type) -> Self {
+        match value {
+            Type::Ftv(_) => Self::RcRef,
+            Type::Unit => Self::Stack,
+            Type::Integer => Self::Stack,
+            Type::Real => Self::Stack,
+            Type::Boolean => Self::Stack,
+            Type::Character => Self::Stack,
+            Type::Array(_) => Self::RcRef,
+            Type::Record(_, _) => Self::RcRef,
+            Type::Function(_, _) => unimplemented!("Should never be called."),
+            Type::Indeterminate => todo!("TODO: figure out what type this should be"),
+        }
+    }
+}
+
+mod private {
+    pub(super) trait Sealed {}
+}
+
+// /// Marker trait to indicate that the type which implements it represents a SQARL type.
+// pub trait SqarlType: Clone + private::Sealed { }
+
+// /// A typechecked type. You can be certain that this type is correct because it is constructed using
+// /// [`check`].
+// ///
+// /// [`typecheck`]: crate::typechecking::check
+// #[derive(Debug, Clone)]
+// pub struct Typechecked(Type);
+// impl private::Sealed for Typechecked {}
+// impl SqarlType for Typechecked { }
+
+// impl Typechecked {
+//     pub(crate) fn new(ty: Type) -> Self {
+//         Self(ty)
+//     }
+//     pub fn ty(&self) -> &Type {
+//         &self.0
+//     }
+// }
+
+// /// Either an abscent type or a type annotation which the user specified. Not to be relied on. To
+// /// receive the actual type, use [`check`] to get it [`Typechecked`].
+// #[derive(Debug, Clone)]
+// pub struct Typeunchecked(pub Option<Type>);
+// impl private::Sealed for Typeunchecked {}
+// impl SqarlType for Typeunchecked { }
+
+/// To be implemented later.
+#[expect(unused)]
 #[derive(Debug, Clone)]
 pub struct Record {
     name: Id,
     fields: Vec<Field>,
 }
 
+/// To be implemented later.
+#[expect(unused)]
 pub struct Class {
     name: Id,
     parent: Option<Id>,

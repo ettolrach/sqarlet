@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 mod codegen;
 mod expr;
 mod parse;
