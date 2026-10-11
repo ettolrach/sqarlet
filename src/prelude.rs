@@ -1,3 +1,6 @@
+// sqarlet - a compiler for the SQA Reference Language. Copyright 2026 ettolrach et al.
+// Licensed under the EUPL-1.2 or later.
+
 use std::cell::RefCell;
 use std::ops::Add;
 use std::rc::Rc;
