@@ -45,127 +45,127 @@ impl Generator {
                 }
             }
             TypedExprKind::Lit(lit) => lit.to_string(),
-            TypedExprKind::Declare(id, maybe_ty, init_expr) => {
-                let name = self.var();
-                let to_return = if let Some(ty) = maybe_ty {
-                    format!(
-                        "let {}: {} = {}",
-                        &name,
-                        ty.rust_type(),
-                        self.generate(init_expr, env)
-                    )
-                } else {
-                    format!("let {} = {}", &name, self.generate(init_expr, env))
-                };
-                env.insert(id.clone(), name);
-                to_return
-            }
-            TypedExprKind::DeclareFromKeyboard(id, Some(ty)) => {
-                let name = self.var();
+            // TypedExprKind::Declare(id, maybe_ty, init_expr) => {
+            //     let name = self.var();
+            //     let to_return = if let Some(ty) = maybe_ty {
+            //         format!(
+            //             "let {}: {} = {}",
+            //             &name,
+            //             ty.rust_type(),
+            //             self.generate(init_expr, env)
+            //         )
+            //     } else {
+            //         format!("let {} = {}", &name, self.generate(init_expr, env))
+            //     };
+            //     env.insert(id.clone(), name);
+            //     to_return
+            // }
+            // TypedExprKind::DeclareFromKeyboard(id, Some(ty)) => {
+            //     let name = self.var();
 
-                let to_return = format!(
-                    "let mut {name}: {} = read_from_keyboard().parse().unwrap()",
-                    ty.rust_type()
-                );
-                env.insert(id.clone(), name);
-                to_return
-            }
-            TypedExprKind::DeclareFromKeyboard(id, None) => {
-                let name = self.var();
-                let to_return =
-                    format!("let mut {name}: NumOrString = read_from_keyboard().into()");
-                env.insert(id.clone(), name);
-                to_return
-            }
-            TypedExprKind::Set(id, set_expr) => {
-                let name = if let Some(name) = env.get(id) {
-                    name.clone()
-                } else {
-                    panic!("Unknown free variable {id}.");
-                };
-                match ty {
-                    Type::Ftv(id) => todo!(),
-                    Type::Unit | Type::Integer | Type::Real | Type::Boolean | Type::Character => {
-                        format!("{name} = {}", self.generate(set_expr, env))
-                    }
-                    Type::Array(_) => {
-                        format!("*{name}.borrow_mut() = {}", self.generate(set_expr, env))
-                    }
-                    Type::Indeterminate => todo!(),
-                    Type::Record(id, fields) => todo!(),
-                    Type::Function(args_ty, output_ty) => todo!(),
-                }
-            }
+            //     let to_return = format!(
+            //         "let mut {name}: {} = read_from_keyboard().parse().unwrap()",
+            //         ty.rust_type()
+            //     );
+            //     env.insert(id.clone(), name);
+            //     to_return
+            // }
+            // TypedExprKind::DeclareFromKeyboard(id, None) => {
+            //     let name = self.var();
+            //     let to_return =
+            //         format!("let mut {name}: NumOrString = read_from_keyboard().into()");
+            //     env.insert(id.clone(), name);
+            //     to_return
+            // }
+            // TypedExprKind::Set(id, set_expr) => {
+            //     let name = if let Some(name) = env.get(id) {
+            //         name.clone()
+            //     } else {
+            //         panic!("Unknown free variable {id}.");
+            //     };
+            //     match ty {
+            //         Type::Ftv(id) => todo!(),
+            //         Type::Unit | Type::Integer | Type::Real | Type::Boolean | Type::Character => {
+            //             format!("{name} = {}", self.generate(set_expr, env))
+            //         }
+            //         Type::Array(_) => {
+            //             format!("*{name}.borrow_mut() = {}", self.generate(set_expr, env))
+            //         }
+            //         Type::Indeterminate => todo!(),
+            //         Type::Record(id, fields) => todo!(),
+            //         Type::Function(args_ty, output_ty) => todo!(),
+            //     }
+            // }
             TypedExprKind::Index(id, nums) => {
                 todo!()
             }
             TypedExprKind::Record(id, fields) => todo!(),
-            TypedExprKind::IfThenElse(cond, then_exprs, else_exprs) => {
-                let mut then_env = env.clone();
-                let mut else_env = env.clone();
-                format!(
-                    "if {} {{\n{}\n}} else {{\n{}\n}}",
-                    self.generate(cond, env),
-                    self.generate_several(then_exprs, &mut then_env),
-                    self.generate_several(else_exprs, &mut else_env)
-                )
-            }
-            TypedExprKind::While(cond, exprs) => format!(
-                "while {} {{\n{}\n}}",
-                self.generate(cond, env),
-                self.generate_several(exprs, env)
-            ),
-            TypedExprKind::Repeat(exprs, cond) => {
-                let exprs_code = self.generate_several(exprs, env);
-                format!(
-                    "{exprs_code}\nwhile {} {{\n{exprs_code}\n}}",
-                    self.generate(cond, env)
-                )
-            }
-            TypedExprKind::For(id, low_expr, high_expr, maybe_step_expr, body) => {
-                let low_code = self.generate(low_expr, &mut env.clone());
-                let high_code = self.generate(high_expr, &mut env.clone());
-                let step_code = if let Some(step_expr) = maybe_step_expr {
-                    format!(".step_by({})", self.generate(step_expr, &mut env.clone()))
-                } else {
-                    String::new()
-                };
-                let name = self.var();
-                env.insert(id.clone(), name.clone());
-                format!(
-                    "for {name} in ({low_code}..{high_code}){step_code} {{\n{}\n}}",
-                    self.generate_several(body, env)
-                )
-            }
-            TypedExprKind::ForEach(id, expr, exprs) => todo!(),
-            TypedExprKind::Receive(id) => {
-                if let Some(name) = env.get(id) {
-                    match ty {
-                        Type::Ftv(id) => todo!(),
-                        Type::Unit
-                        | Type::Integer
-                        | Type::Real
-                        | Type::Boolean
-                        | Type::Character => {
-                            format!("{name} = read_from_keyboard().parse().unwrap()")
-                        }
-                        Type::Array(_) => {
-                            panic!("Tried to receive from keyboard for an ARRAY type.")
-                        }
-                        Type::Indeterminate => unreachable!(),
-                        Type::Record(id, fields) => {
-                            panic!("Tried to receive from keyboard for a RECORD type.")
-                        }
-                        Type::Function(args_ty, output_ty) => unreachable!(),
-                    }
-                } else {
-                    let name = self.var();
-                    let to_return =
-                        format!("let mut {name}: NumOrString = read_from_keyboard().into()");
-                    env.insert(id.clone(), name);
-                    to_return
-                }
-            }
+            // TypedExprKind::IfThenElse(cond, then_exprs, else_exprs) => {
+            //     let mut then_env = env.clone();
+            //     let mut else_env = env.clone();
+            //     format!(
+            //         "if {} {{\n{}\n}} else {{\n{}\n}}",
+            //         self.generate(cond, env),
+            //         self.generate_several(then_exprs, &mut then_env),
+            //         self.generate_several(else_exprs, &mut else_env)
+            //     )
+            // }
+            // TypedExprKind::While(cond, exprs) => format!(
+            //     "while {} {{\n{}\n}}",
+            //     self.generate(cond, env),
+            //     self.generate_several(exprs, env)
+            // ),
+            // TypedExprKind::Repeat(exprs, cond) => {
+            //     let exprs_code = self.generate_several(exprs, env);
+            //     format!(
+            //         "{exprs_code}\nwhile {} {{\n{exprs_code}\n}}",
+            //         self.generate(cond, env)
+            //     )
+            // }
+            // TypedExprKind::For(id, low_expr, high_expr, maybe_step_expr, body) => {
+            //     let low_code = self.generate(low_expr, &mut env.clone());
+            //     let high_code = self.generate(high_expr, &mut env.clone());
+            //     let step_code = if let Some(step_expr) = maybe_step_expr {
+            //         format!(".step_by({})", self.generate(step_expr, &mut env.clone()))
+            //     } else {
+            //         String::new()
+            //     };
+            //     let name = self.var();
+            //     env.insert(id.clone(), name.clone());
+            //     format!(
+            //         "for {name} in ({low_code}..{high_code}){step_code} {{\n{}\n}}",
+            //         self.generate_several(body, env)
+            //     )
+            // }
+            // TypedExprKind::ForEach(id, expr, exprs) => todo!(),
+            // TypedExprKind::Receive(id) => {
+            //     if let Some(name) = env.get(id) {
+            //         match ty {
+            //             Type::Ftv(id) => todo!(),
+            //             Type::Unit
+            //             | Type::Integer
+            //             | Type::Real
+            //             | Type::Boolean
+            //             | Type::Character => {
+            //                 format!("{name} = read_from_keyboard().parse().unwrap()")
+            //             }
+            //             Type::Array(_) => {
+            //                 panic!("Tried to receive from keyboard for an ARRAY type.")
+            //             }
+            //             Type::Indeterminate => unreachable!(),
+            //             Type::Record(id, fields) => {
+            //                 panic!("Tried to receive from keyboard for a RECORD type.")
+            //             }
+            //             Type::Function(args_ty, output_ty) => unreachable!(),
+            //         }
+            //     } else {
+            //         let name = self.var();
+            //         let to_return =
+            //             format!("let mut {name}: NumOrString = read_from_keyboard().into()");
+            //         env.insert(id.clone(), name);
+            //         to_return
+            //     }
+            // }
             TypedExprKind::BinOp(lhs, operator, rhs) => {
                 format!(
                     "{} {operator} {}",
@@ -173,6 +173,7 @@ impl Generator {
                     self.generate(rhs, env)
                 )
             }
+            TypedExprKind::Array(exprs) => todo!(),
         }
     }
 
@@ -214,9 +215,7 @@ pub fn generate_code(program: &[TypecheckedExpr]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        expr::{Expr, ExprKind, Literal, Operator},
-        parse::Position,
-        typechecking::typecheck_program,
+        expr::{BinOperator, Expr, ExprKind, Literal, Stmt, StmtKind, ValueSource}, parse::Position, typechecking::typecheck_program,
     };
 
     use super::*;
@@ -224,12 +223,12 @@ mod tests {
     #[test]
     fn running_total() {
         let mut program = vec![
-            Expr {
+            Stmt {
                 position: Position { line: 1, column: 1 },
-                expr: ExprKind::Declare(
+                stmt: StmtKind::Declare(
                     Id::new(String::from("total")).unwrap(),
                     None,
-                    Box::new(Expr {
+                    ValueSource::Expr(Expr {
                         position: Position {
                             line: 1,
                             column: 25,
@@ -238,35 +237,35 @@ mod tests {
                     }),
                 ),
             },
-            Expr {
+            Stmt {
                 position: Position { line: 2, column: 1 },
-                expr: ExprKind::For(
+                stmt: StmtKind::For(
                     Id::new(String::from("loop")).unwrap(),
-                    Box::new(Expr {
+                    Expr {
                         position: Position {
                             line: 2,
                             column: 15,
                         },
                         expr: ExprKind::Lit(Literal::Integer(1)),
-                    }),
-                    Box::new(Expr {
+                    },
+                    Expr {
                         position: Position {
                             line: 2,
                             column: 20,
                         },
                         expr: ExprKind::Lit(Literal::Integer(10)),
-                    }),
+                    },
                     None,
                     vec![
-                        Expr {
+                        Stmt {
                             position: Position { line: 3, column: 4 },
-                            expr: ExprKind::Receive(Id::new(String::from("number")).unwrap()),
+                            stmt: StmtKind::Receive(Id::new(String::from("number")).unwrap()),
                         },
-                        Expr {
+                        Stmt {
                             position: Position { line: 4, column: 4 },
-                            expr: ExprKind::Set(
+                            stmt: StmtKind::Set(
                                 Id::new(String::from("total")).unwrap(),
-                                Box::new(Expr {
+                                Expr {
                                     position: Position {
                                         line: 4,
                                         column: 18,
@@ -281,7 +280,7 @@ mod tests {
                                                 Id::new(String::from("total")).unwrap(),
                                             ),
                                         }),
-                                        Operator::Plus,
+                                        BinOperator::Plus,
                                         Box::new(Expr {
                                             position: Position {
                                                 line: 4,
@@ -292,7 +291,7 @@ mod tests {
                                             ),
                                         }),
                                     ),
-                                }),
+                                },
                             ),
                         },
                     ],
@@ -301,7 +300,7 @@ mod tests {
         ];
 
         let typechecked_program = typecheck_program(program).unwrap();
-        let rust_code = generate_code(&typechecked_program);
-        println!("{rust_code}");
+        // let rust_code = generate_code(&typechecked_program);
+        // println!("{rust_code}");
     }
 }

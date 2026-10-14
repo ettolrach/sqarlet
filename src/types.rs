@@ -147,6 +147,29 @@ impl From<Type> for VarType {
     }
 }
 
+/// Write a nonempty slice into a [`std::fmt::Write`]able type.
+/// 
+/// # Errors
+/// 
+/// An error while writing occurred. For more info, see the 'Errors' section for the
+/// [`std::fmt::Write::write_str`] function.
+pub fn write_types(types: &[Type], w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+    match types {
+        [] => Ok(()),
+        [ty] => {
+            w.write_str(ty.to_string().as_str())
+        }
+        [x, xs @ ..] => {
+            w.write_str(x.to_string().as_str());
+            for ty in xs {
+                w.write_str(" or ");
+                w.write_str(ty.to_string().as_str());
+            }
+            Ok(())
+        }
+    }
+}
+
 mod private {
     pub(super) trait Sealed {}
 }

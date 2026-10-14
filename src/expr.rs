@@ -33,33 +33,26 @@ impl Display for Literal {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operator {
+pub enum BinOperator {
     Ampersand,
     Plus,
 }
 
-impl Operator {
-    pub fn check_types(
+impl BinOperator {
+    /// Returns the expected types of the lhs and rhs arguments.
+    /// 
+    /// # Return value
+    /// 
+    /// A tuple where the `.0` is the expected lhs type and `.1` the rhs type. An operator may
+    /// accept several types. If the vec is empty, then any type is accepted.
+    pub fn types_to_check(
         &self,
-        lhs: &TypecheckedExpr,
-        rhs: &TypecheckedExpr,
-    ) -> Result<(), TypeError> {
+    ) -> (Vec<Type>, Vec<Type>) {
         match self {
             // Ampersand (concat) always works because it'll coerce anything to a string.
-            Self::Ampersand => Ok(()),
-            Self::Plus => {
-                for expr in [lhs, rhs] {
-                    if !matches!(expr.ty, Type::Integer | Type::Indeterminate) {
-                        return Err(TypeError::IncorrectOperatorType(
-                            *self,
-                            Box::new(Type::Integer),
-                            Box::new(expr.ty.clone()),
-                            expr.position,
-                        ));
-                    }
-                }
-                Ok(())
-            }
+            Self::Ampersand => (Vec::new(), Vec::new()),
+            Self::Plus => (vec![Type::Integer, Type::Real], vec![Type::Integer, Type::Real]),
+            
         }
     }
 
@@ -72,7 +65,7 @@ impl Operator {
     }
 }
 
-impl Display for Operator {
+impl Display for BinOperator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ampersand => write!(f, "&"),
@@ -82,29 +75,61 @@ impl Display for Operator {
 }
 
 #[derive(Debug, Clone)]
+/// A source for a value. Either an expression or a source, such as a `KEYBOARD`.
+pub enum ValueSource {
+    /// An expression.
+    Expr(Expr),
+    /// The only current other source.
+    Keyboard,
+    // In the future, we also accept a file or online source.
+    // FileOrUrl(String),
+}
+
+/// An output device, such as a `DISPLAY`.
+#[derive(Debug, Clone)]
+pub enum Output {
+    Display,
+    // In the future, we also accept a file or online source.
+    // FileOrUrl(String),
+}
+
+#[derive(Debug, Clone)]
 pub enum ExprKind {
     /// Free variables.
     Fv(Id),
     /// Literal.
     Lit(Literal),
-    /// Variable declaration, aka. let binding.
+    /// Array
+    Array(Vec<Expr>),
+    /// Array indexing. In the form `Id[u64][u64]...`.
+    Index(Id, Vec<Expr>),
+    /// Record declaration.
+    Record(Id, Vec<Field>),
+    /// Binary operation.
+    BinOp(Box<Expr>, BinOperator, Box<Expr>),
+}
+
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub position: Position,
+    pub expr: ExprKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum StmtKind {
+    /// Variable declaration, a.k.a. let binding.
     ///
     /// Note: the reference is contradictory and on the one hand specifies that a variable
     /// declaration must be initialised using a value, but then shows examples of it being
     /// initialised with an expression. I will assume that you can initialise a variable with an
     /// expression to match the examples.
-    Declare(Id, Option<Type>, Box<Expr>),
-    DeclareFromKeyboard(Id, Option<Type>),
+    Declare(Id, Option<Type>, ValueSource),
     /// Varaible assigment.
-    Set(Id, Box<Expr>),
-    /// Array indexing. In the form `Id[u64][u64]...`.
-    Index(Id, Vec<Expr>),
-    /// Record declaration.
-    Record(Id, Vec<Field>),
+    Set(Id, Expr),
     /// Conditional.
-    IfThenElse(Box<Expr>, Vec<Expr>, Vec<Expr>),
+    IfThenElse(Expr, Vec<Stmt>, Vec<Stmt>),
     /// A while loop.
-    While(Box<Expr>, Vec<Expr>),
+    While(Expr, Vec<Stmt>),
     /// A repeat-until loop, also known as a do-while loop.
     ///
     /// # Example
@@ -124,21 +149,19 @@ pub enum ExprKind {
     /// From BBC Bitesize (no date). 'Implementation: Algorithm specification, Input validation
     /// algorithm'. Available at: <https://www.bbc.co.uk/bitesize/guides/z3gnqhv/revision/2>
     /// (Accessed on: 2026-10-08)
-    Repeat(Vec<Expr>, Box<Expr>),
-    /// For loop. ID of counter, low expr, high expr, maybe step expr, and then body.
-    For(Id, Box<Expr>, Box<Expr>, Option<Box<Expr>>, Vec<Expr>),
-    ForEach(Id, Box<Expr>, Vec<Expr>),
+    Repeat(Vec<Stmt>, Expr),
     /// Receive input from the keyboard (i.e. STDIN). The only documented input device is the
     /// keyboard, so this is always STDIN.
     ///
     /// RECEIVE is also used to get a file/URL contents, but that will be implemented later.
     Receive(Id),
-    /// Binary operation.
-    BinOp(Box<Expr>, Operator, Box<Expr>),
+    /// For loop. ID of counter, low expr, high expr, maybe step expr, and then body.
+    For(Id, Expr, Expr, Option<Expr>, Vec<Stmt>),
+    ForEach(Id, Expr, Vec<Stmt>),
 }
 
 #[derive(Debug, Clone)]
-pub struct Expr {
+pub struct Stmt {
     pub position: Position,
-    pub expr: ExprKind,
+    pub stmt: StmtKind,
 }
