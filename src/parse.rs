@@ -3,7 +3,7 @@
 
 use std::fmt::Display;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Position {
     pub line: i64,
     pub column: i64,

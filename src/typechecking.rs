@@ -3,16 +3,16 @@
 
 //! We typecheck using a bidirectional algorithm. [`Stmt`]s are all checked to be of type
 //! [`Type::Unit`]. We then split the typechecking of [`Expr`]s are then split into two functions:
-//! 
+//!
 //! * [`infer`]: some expressions, usually eliminators, can infer the type that they are.
 //! * [`check`]: others require the type that they're supposed to be to be supplied.
-//! 
+//!
 //! We use the Pfenning method (Dunfield and Krishnaswami, 2013) to decide which expressions are
 //! checking and which are inferring. The short of it is: introduction rules (constructors) check,
 //! elimination rules infer.
-//! 
+//!
 //! # References
-//! 
+//!
 //! * Dunfield, J., Krishnaswami, N., 2022. Bidirectional Typing. ACM Comput. Surv. 54, 1–38.
 //!   <https://doi.org/10.1145/3450952>.
 
@@ -21,7 +21,10 @@ use std::{collections::HashMap, iter::zip};
 use thiserror::Error;
 
 use crate::{
-    expr::{BinOperator, Expr, ExprKind, Literal, Stmt, StmtKind, ValueSource}, parse::Position, typechecking::TypeError::DeclWithoutKnownType, types::{Field, Id, Type, write_types},
+    expr::{BinOperator, Expr, ExprKind, Literal, Stmt, StmtKind, ValueSource},
+    parse::Position,
+    typechecking::TypeError::DeclWithoutKnownType,
+    types::{Coercion, Field, Id, Type, write_types},
 };
 
 /// An output device, such as a `DISPLAY`.
@@ -84,7 +87,13 @@ pub enum TypedStmtKind {
     /// RECEIVE is also used to get a file/URL contents, but that will be implemented later.
     Receive(Id),
     /// For loop. ID of counter, low expr, high expr, maybe step expr, and then body.
-    For(Id, TypecheckedExpr, TypecheckedExpr, Option<TypecheckedExpr>, Vec<TypecheckedStmt>),
+    For(
+        Id,
+        TypecheckedExpr,
+        TypecheckedExpr,
+        Option<TypecheckedExpr>,
+        Vec<TypecheckedStmt>,
+    ),
     ForEach(Id, TypecheckedExpr, Vec<TypecheckedStmt>),
 }
 
@@ -102,6 +111,7 @@ impl TypecheckedStmt {
 
 #[derive(Debug, Clone)]
 pub enum TypedExprKind {
+    Coerced(Coercion, Box<TypedExprKind>),
     /// Free variables.
     Fv(Id),
     /// Literal.
@@ -148,8 +158,13 @@ pub enum TypeError {
     CondNotBool(Position),
     /// A declaration without `AS type` annotation where the type cannot be determined from the
     /// initialiser.
-    #[error("A variable was declared without a type specified and with an expression whose type cannot be determined (Spec 3.4). At {0}")]
+    #[error(
+        "A variable was declared without a type specified and with an expression whose type cannot be determined (Spec 3.4). At {0}"
+    )]
     DeclWithoutKnownType(Position),
+    /// Expected a non-array type, but got the empty array.
+    #[error("Expected {0} but got the empty array at {1}")]
+    EmptyArrayAsNonArray(Box<Type>, Position),
     /// An empty array was found in an [`infer`] position. That's not permitted by the spec.
     #[error("Tried to infer the type of an empty array, but that's not permitted. At {0}")]
     EmptyArrayInInferPosition(Position),
@@ -163,8 +178,21 @@ pub enum TypeError {
     #[error("FOR EACH received {0} instead of ARRAY at {1}.")]
     ForeachNotArr(Type, Position),
     /// The input to an operator wasn't the expected type.
-    #[error("Incorrect type received for operator {0}. Expected {1}, got {2} at {3}.")]
-    IncorrectOperatorType(BinOperator, Box<Type>, Box<Type>, Position),
+    #[error(
+        "Incorrect type received for binary operator {op}. Expected {}, got lhs {lhs} and rhs {rhs} at {pos}",
+        {
+            let mut s = String::new();
+            write_types(expected, &mut s).unwrap();
+            s
+        },
+    )]
+    IncorrectBinOperatorType {
+        op: BinOperator,
+        expected: Vec<Type>,
+        lhs: Box<Type>,
+        rhs: Box<Type>,
+        pos: Position,
+    },
     /// The index of an array was not of type INTEGER.
     #[error("Index expression received a {0} instead of an INTEGER index at {1}.")]
     IndexExprNotNum(Type, Position),
@@ -191,15 +219,12 @@ pub enum TypeError {
     )]
     InitWrongType(Id, Box<Type>, Box<Type>, Position),
     /// Mismatched type in [`check`]. (expected type, actual type, position)
-    #[error(
-        "Mismatched type; expected {}, actually got {actual}, at {pos}",
-        {
-            let mut buffer = String::new();
-            write_types(expected, &mut buffer);
-            buffer
-        }
-    )]
-    MismatchedType { expected: Vec<Type>, actual: Box<Type>, pos: Position},
+    #[error("Mismatched type; expected {expected}, actually got {actual}, at {pos}")]
+    MismatchedType {
+        expected: Box<Type>,
+        actual: Box<Type>,
+        pos: Position,
+    },
     /// The free variable wasn't found in the context.
     #[error("Undefined variable {0} at {1}.")]
     UndefinedVariable(Id, Position),
@@ -226,28 +251,49 @@ pub(crate) fn infer(
             expr.position,
             lit.into(),
         )),
-        ExprKind::Array(exprs) if exprs.is_empty() => Err(
-            TypeError::EmptyArrayInInferPosition(expr.position),
-        ),
+        ExprKind::Array(exprs) if exprs.is_empty() => {
+            Err(TypeError::EmptyArrayInInferPosition(expr.position))
+        }
         ExprKind::Array(exprs) => {
-            let checked_exprs = infer_exprs(exprs, Ok, context)?;
-            // Safe to get first element because we now `exprs`' length is nonzero and
+            assert!(!exprs.is_empty());
+            let inferred_exprs = infer_exprs(exprs, Ok, context)?;
+            // Safe to get first element because we know `exprs`' length is nonzero and
             // `infer_exprs` shouldn't change the length.
-            let first_type = checked_exprs[0].ty.clone();
+            let first_type = inferred_exprs[0].ty.clone();
+
+            let joined_ty: Type = zip(1usize.., &inferred_exprs[1..]).try_fold(
+                first_type.clone(),
+                |acc, (index, e)| {
+                    // TODO: apply coercions here too.
+                    acc.join(&e.ty)
+                        .ok_or_else(|| TypeError::ArrayElemsDifferingTypes {
+                            ty: Box::new(acc.clone()),
+                            index,
+                            bad_ty: Box::new(e.ty.to_owned()),
+                            bad_position: e.position,
+                            pos: expr.position,
+                        })
+                },
+            )?;
+
             // Check that all other elements have the same type.
-            for (index, e) in zip(1usize.., &checked_exprs[1..]) {
-                if e.ty != first_type {
-                    return Err(TypeError::ArrayElemsDifferingTypes {
-                        ty: Box::new(first_type),
-                        index,
-                        bad_ty: Box::new(e.ty.clone()),
-                        bad_position: e.position,
-                        pos: expr.position,
-                    });
-                }
-            }
-            Ok(TypecheckedExpr::new(TypedExprKind::Array(checked_exprs), expr.position, first_type))
-        },
+            // for (index, e) in zip(1usize.., &inferred_exprs[1..]) {
+            //     if e.ty != first_type {
+            //         return Err(TypeError::ArrayElemsDifferingTypes {
+            //             ty: Box::new(first_type),
+            //             index,
+            //             bad_ty: Box::new(e.ty.clone()),
+            //             bad_position: e.position,
+            //             pos: expr.position,
+            //         });
+            //     }
+            // }
+            Ok(TypecheckedExpr::new(
+                TypedExprKind::Array(inferred_exprs),
+                expr.position,
+                Type::Array(Box::new(joined_ty)),
+            ))
+        }
         ExprKind::Index(id, nums) => {
             fn get_innermost_type(
                 ty: &Type,
@@ -306,60 +352,73 @@ pub(crate) fn infer(
         }
         ExprKind::BinOp(lhs, op, rhs) => {
             let lhs_pos = lhs.position;
-            let result_type = op.result_type();
-            let (lhs_tys, rhs_tys) = op.types_to_check();
+            let inferred_lhs = infer(*lhs, context)?;
+            let inferred_rhs = infer(*rhs, context)?;
 
-            let checked_lhs = check(*lhs, &lhs_tys, context)?;
-            let checked_rhs = check(*rhs, &rhs_tys, context)?;
+            let joined = op.check_and_join(&inferred_lhs.ty, &inferred_rhs.ty, expr.position)?;
 
             Ok(TypecheckedExpr::new(
-                TypedExprKind::BinOp(Box::new(checked_lhs), op, Box::new(checked_rhs)),
+                TypedExprKind::BinOp(Box::new(inferred_lhs), op, Box::new(inferred_rhs)),
                 expr.position,
-                result_type,
+                joined,
             ))
         }
     }
 }
 
 /// Check an expression's type matches the `expected` type.
-/// 
+///
 /// Note: usually in a bidirectional algorithm, we wouldn't have a return type. We would return
 /// `Result<(), TypeError>`. However, because we need to change from one IR ([`Expr`]) to another
 /// ([`TypecheckedExpr`]), it's easiest to return the typechecked expression. However, we do *not*
 /// infer any types here.
 pub(crate) fn check(
     expr: Expr,
-    expected: &[Type],
+    expected: &Type,
     context: &mut HashMap<Id, Type>,
 ) -> Result<TypecheckedExpr, TypeError> {
     match expr.expr {
-        ExprKind::Lit(lit) => {
-            let ty: Type = lit.into();
-            if !expected.contains(&ty) {
-                Err(TypeError::MismatchedType {
-                    expected: expected.to_owned(),
-                    actual: Box::new(ty),
-                    pos: expr.position,
-                })
+        ExprKind::Record(id, fields) => {
+            todo!("records are yet to be implemented");
+        }
+        ExprKind::Array(exprs) if exprs.is_empty() => {
+            if !expected.is_array() {
+                Err(TypeError::EmptyArrayAsNonArray(
+                    Box::new(expected.to_owned()),
+                    expr.position,
+                ))
             } else {
                 Ok(TypecheckedExpr::new(
-                    TypedExprKind::Lit(lit),
+                    TypedExprKind::Array(Vec::new()),
                     expr.position,
-                    ty,
+                    expected.to_owned(),
                 ))
             }
         }
-        ExprKind::Record(id, fields) => {
-            todo!("records are yet to be implemented");
+        ExprKind::Array(exprs) if expected.is_array() => {
+            assert!(!exprs.is_empty());
+            let Type::Array(inner_ty) = expected.clone() else {
+                unreachable!("we checked for `expected.is_array()` above");
+            };
+            let checked_exprs = check_exprs(exprs, &inner_ty, context)?;
+            Ok(TypecheckedExpr::new(
+                TypedExprKind::Array(checked_exprs),
+                expr.position,
+                Type::Array(inner_ty),
+            ))
         }
         _ => {
             let pos = expr.position;
             let inferred_expr = infer(expr, context)?;
-            if expected.contains(&inferred_expr.ty) {
-                Ok(inferred_expr)
+            if let Some(coercion) = inferred_expr.ty.is_subtype_with_coercion(expected) {
+                Ok(TypecheckedExpr::new(
+                    TypedExprKind::Coerced(coercion, Box::new(inferred_expr.expr)),
+                    inferred_expr.position,
+                    expected.clone(),
+                ))
             } else {
                 Err(TypeError::MismatchedType {
-                    expected: expected.to_owned(),
+                    expected: Box::new(expected.to_owned()),
                     actual: Box::new(inferred_expr.ty),
                     pos,
                 })
@@ -387,6 +446,23 @@ fn infer_exprs(
         .collect()
 }
 
+/// Check many expressions.
+///
+/// # Arguments
+///
+/// * `exprs` - expressions to check.
+/// * `context` - the context required to call [`check`].
+fn check_exprs(
+    exprs: impl IntoIterator<Item = Expr>,
+    expected: &Type,
+    context: &mut HashMap<Id, Type>,
+) -> Result<Vec<TypecheckedExpr>, TypeError> {
+    exprs
+        .into_iter()
+        .map(|e| check(e, expected, context))
+        .collect()
+}
+
 fn check_stmt(stmt: Stmt, context: &mut HashMap<Id, Type>) -> Result<TypecheckedStmt, TypeError> {
     match stmt.stmt {
         StmtKind::Declare(id, None, ValueSource::Expr(expr)) => {
@@ -398,76 +474,111 @@ fn check_stmt(stmt: Stmt, context: &mut HashMap<Id, Type>) -> Result<Typechecked
                 TypecheckedValueSource::Expr(inferred_expr),
             );
             Ok(TypecheckedStmt::new(kind, stmt.position))
-        },
-        StmtKind::Declare(id, None, ValueSource::Keyboard) => Err(DeclWithoutKnownType(stmt.position)),
+        }
+        StmtKind::Declare(id, None, ValueSource::Keyboard) => {
+            Err(DeclWithoutKnownType(stmt.position))
+        }
         StmtKind::Declare(id, Some(annotated_ty), ValueSource::Expr(expr)) => {
-            todo!()
-        },
+            let checked_expr = check(expr, &annotated_ty, context)?;
+            context.insert(id.clone(), annotated_ty.clone());
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::Declare(
+                    id,
+                    annotated_ty,
+                    TypecheckedValueSource::Expr(checked_expr),
+                ),
+                stmt.position,
+            ))
+        }
         StmtKind::Declare(id, Some(annotated_ty), ValueSource::Keyboard) => {
             context.insert(id.clone(), annotated_ty.clone());
             let kind = TypedStmtKind::Declare(id, annotated_ty, TypecheckedValueSource::Keyboard);
             Ok(TypecheckedStmt::new(kind, stmt.position))
-        },
+        }
         StmtKind::Set(id, set_expr) => {
             // unfortunate to require a clone here, can probably avoid it somehow.
             let Some(ty) = context.get(&id).map(ToOwned::to_owned) else {
                 return Err(TypeError::UndefinedVariable(id, stmt.position));
             };
-            let typed_set_expr = check(set_expr, &[ty], context)?;
-            Ok(TypecheckedStmt::new(TypedStmtKind::Set(id, typed_set_expr), stmt.position))
-        },
+            let typed_set_expr = check(set_expr, &ty, context)?;
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::Set(id, typed_set_expr),
+                stmt.position,
+            ))
+        }
         StmtKind::IfThenElse(cond_expr, then_stmts, else_stmts) => {
-            let checked_cond = check(cond_expr, &[Type::Boolean], context)?;
+            let checked_cond = check(cond_expr, &Type::Boolean, context)?;
             let checked_then = check_stmts(then_stmts, context)?;
             let checked_else = check_stmts(else_stmts, context)?;
-            Ok(TypecheckedStmt::new(TypedStmtKind::IfThenElse(checked_cond, checked_then, checked_else), stmt.position))
-        },
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::IfThenElse(checked_cond, checked_then, checked_else),
+                stmt.position,
+            ))
+        }
         StmtKind::While(cond, body) => {
-            let checked_cond = check(cond, &[Type::Boolean], context)?;
+            let checked_cond = check(cond, &Type::Boolean, context)?;
             let checked_body = check_stmts(body, context)?;
-            Ok(TypecheckedStmt::new(TypedStmtKind::While(checked_cond, checked_body), stmt.position))
-        },
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::While(checked_cond, checked_body),
+                stmt.position,
+            ))
+        }
         StmtKind::Repeat(body, cond) => {
             // it should be okay to check the cond first as it shouldn't see variables declared in
             // the body. well, the spec never says one way or the other, so let's just do the
             // easier thing and copy-paste from the `While` case above.
-            let checked_cond = check(cond, &[Type::Boolean], context)?;
+            let checked_cond = check(cond, &Type::Boolean, context)?;
             let checked_body = check_stmts(body, context)?;
-            Ok(TypecheckedStmt::new(TypedStmtKind::Repeat(checked_body, checked_cond), stmt.position))
-        },
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::Repeat(checked_body, checked_cond),
+                stmt.position,
+            ))
+        }
         StmtKind::Receive(id) => {
             let Some(ty) = context.get(&id).map(ToOwned::to_owned) else {
                 return Err(TypeError::UndefinedVariable(id, stmt.position));
             };
             // Nothing to add to the context, that's all.
-            Ok(TypecheckedStmt::new(TypedStmtKind::Receive(id), stmt.position))
-        },
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::Receive(id),
+                stmt.position,
+            ))
+        }
         StmtKind::For(id, low, high, maybe_step, body) => {
-            let checked_low = check(low, &[Type::Integer], context)?;
-            let checked_high = check(high, &[Type::Integer], context)?;
+            let checked_low = check(low, &Type::Integer, context)?;
+            let checked_high = check(high, &Type::Integer, context)?;
             let checked_step = if let Some(step) = maybe_step {
-                Some(check(step, &[Type::Integer], context)?)
+                Some(check(step, &Type::Integer, context)?)
             } else {
                 None
             };
             context.insert(id.clone(), Type::Integer);
             let checked_body = check_stmts(body, context)?;
-            Ok(TypecheckedStmt::new(TypedStmtKind::For(id, checked_low, checked_high, checked_step, checked_body), stmt.position))
-        },
+            Ok(TypecheckedStmt::new(
+                TypedStmtKind::For(id, checked_low, checked_high, checked_step, checked_body),
+                stmt.position,
+            ))
+        }
         StmtKind::ForEach(id, arr_expr, body) => {
             let inferred_arr = infer(arr_expr, context)?;
             if let Type::Array(inner_type) = inferred_arr.ty.clone() {
                 context.insert(id.clone(), *inner_type.clone());
                 let checked_body = check_stmts(body, context)?;
-                Ok(TypecheckedStmt::new(TypedStmtKind::ForEach(id, inferred_arr, checked_body), stmt.position))
+                Ok(TypecheckedStmt::new(
+                    TypedStmtKind::ForEach(id, inferred_arr, checked_body),
+                    stmt.position,
+                ))
             } else {
                 Err(TypeError::ForeachNotArr(inferred_arr.ty, stmt.position))
             }
-        },
+        }
     }
 }
 
-fn check_stmts(stmts: impl IntoIterator<Item = Stmt>, context: &mut HashMap<Id, Type>) -> Result<Vec<TypecheckedStmt>, TypeError> {
+fn check_stmts(
+    stmts: impl IntoIterator<Item = Stmt>,
+    context: &mut HashMap<Id, Type>,
+) -> Result<Vec<TypecheckedStmt>, TypeError> {
     stmts
         .into_iter()
         .map(|stmt| check_stmt(stmt, context))
@@ -484,6 +595,181 @@ mod tests {
     use crate::expr::Literal;
 
     use super::*;
+
+    #[test]
+    fn int_to_real_coercion() {
+        let expr = Expr {
+            position: Position { line: 1, column: 1 },
+            expr: ExprKind::BinOp(
+                Box::new(Expr {
+                    position: Position { line: 1, column: 1 },
+                    expr: ExprKind::Lit(Literal::Integer(2)),
+                }),
+                BinOperator::Plus,
+                Box::new(Expr {
+                    position: Position { line: 1, column: 5 },
+                    expr: ExprKind::Lit(Literal::Real(2.0)),
+                }),
+            ),
+        };
+        let checked: TypecheckedExpr = check(expr, &Type::Real, &mut HashMap::new()).unwrap();
+        assert_eq!(Type::Real, checked.ty);
+    }
+
+    #[test]
+    fn array_of_integer() {
+        let expr = Expr {
+            position: Position { line: 1, column: 1 },
+            expr: ExprKind::Array(vec![
+                Expr {
+                    position: Position { line: 1, column: 2 },
+                    expr: ExprKind::Lit(Literal::Integer(0)),
+                },
+                Expr {
+                    position: Position { line: 1, column: 5 },
+                    expr: ExprKind::Lit(Literal::Integer(1)),
+                },
+            ]),
+        };
+        let checked = check(
+            expr,
+            &Type::Array(Box::new(Type::Integer)),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(Type::Array(Box::new(Type::Integer)), checked.ty);
+    }
+
+    #[test]
+    fn disallow_array_elems_differing_types() {
+        // [0, false]
+        let expr = Expr {
+            position: Position { line: 1, column: 1 },
+            expr: ExprKind::Array(vec![
+                Expr {
+                    position: Position { line: 1, column: 2 },
+                    expr: ExprKind::Lit(Literal::Integer(0)),
+                },
+                Expr {
+                    position: Position { line: 1, column: 5 },
+                    expr: ExprKind::Lit(Literal::Boolean(false)),
+                },
+            ]),
+        };
+        let res = check(
+            expr,
+            &Type::Array(Box::new(Type::Integer)),
+            &mut HashMap::new(),
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn error_on_non_array_declared_using_empty_array() {
+        // DECLARE x AS INTEGER INITIALLY []
+        let stmt = Stmt {
+            position: Position { line: 1, column: 1 },
+            stmt: StmtKind::Declare(
+                Id::new(String::from("x")).unwrap(),
+                Some(Type::Integer),
+                ValueSource::Expr(Expr {
+                    position: Position {
+                        line: 1,
+                        column: 32,
+                    },
+                    expr: ExprKind::Array(Vec::new()),
+                }),
+            ),
+        };
+        assert!(check_stmt(stmt, &mut HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn infer_integer_and_real_array() {
+        // DECLARE x INITIALLY [1, 2.5]
+        let stmt = Stmt {
+            position: Position { line: 1, column: 1 },
+            stmt: StmtKind::Declare(
+                Id::new(String::from("x")).unwrap(),
+                None,
+                ValueSource::Expr(Expr {
+                    position: Position {
+                        line: 1,
+                        column: 21,
+                    },
+                    expr: ExprKind::Array(vec![
+                        Expr {
+                            position: Position {
+                                line: 1,
+                                column: 22,
+                            },
+                            expr: ExprKind::Lit(Literal::Integer(1)),
+                        },
+                        Expr {
+                            position: Position {
+                                line: 1,
+                                column: 25,
+                            },
+                            expr: ExprKind::Lit(Literal::Real(2.5)),
+                        },
+                    ]),
+                }),
+            ),
+        };
+        let checked_stmt = check_stmt(stmt, &mut HashMap::new()).unwrap();
+        let TypedStmtKind::Declare(id, ty, val_src) = checked_stmt.stmt else {
+            panic!("expected stmt was not a Declare");
+        };
+        assert_eq!(Type::Array(Box::new(Type::Real)), ty);
+    }
+
+    #[test]
+    fn cannot_assign_real_to_integer_decl() {
+        let id = Id::new(String::from("x")).unwrap();
+        let mut context: HashMap<Id, Type> = {
+            let mut map = HashMap::new();
+            map.insert(id.clone(), Type::Integer);
+            map
+        };
+        // SET x TO 2.5
+        let stmt = Stmt {
+            position: Position { line: 1, column: 1 },
+            stmt: StmtKind::Set(
+                id,
+                Expr {
+                    position: Position {
+                        line: 1,
+                        column: 10,
+                    },
+                    expr: ExprKind::Lit(Literal::Real(2.5)),
+                },
+            ),
+        };
+
+        let res = check_stmt(stmt, &mut context);
+        assert!(res.is_err(), "{:?}", res.unwrap());
+    }
+
+    #[test]
+    fn declare_real() {
+        // DECLARE x AS REAL INITIALLY 42
+        let stmt = Stmt {
+            position: Position { line: 1, column: 1 },
+            stmt: StmtKind::Declare(
+                Id::new(String::from("x")).unwrap(),
+                Some(Type::Real),
+                ValueSource::Expr(Expr {
+                    position: Position {
+                        line: 1,
+                        column: 32,
+                    },
+                    expr: ExprKind::Lit(Literal::Integer(42)),
+                }),
+            ),
+        };
+        let checked_stmt = check_stmt(stmt, &mut HashMap::new()).unwrap();
+        println!("{checked_stmt:#?}");
+    }
 
     #[test]
     fn running_total() {

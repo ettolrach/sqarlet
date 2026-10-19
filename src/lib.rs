@@ -4,11 +4,11 @@
 #![allow(unused)]
 
 mod codegen;
-mod expr;
-mod parse;
+pub mod expr;
+pub mod parse;
 mod prelude;
-mod typechecking;
-mod types;
+pub mod typechecking;
+pub mod types;
 
 /// Returns the transpiled Rust code.
 pub fn generate(s: &str) -> Result<String, ()> {

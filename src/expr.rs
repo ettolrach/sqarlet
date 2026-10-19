@@ -40,27 +40,57 @@ pub enum BinOperator {
 
 impl BinOperator {
     /// Returns the expected types of the lhs and rhs arguments.
-    /// 
+    ///
     /// # Return value
-    /// 
+    ///
     /// A tuple where the `.0` is the expected lhs type and `.1` the rhs type. An operator may
     /// accept several types. If the vec is empty, then any type is accepted.
-    pub fn types_to_check(
-        &self,
-    ) -> (Vec<Type>, Vec<Type>) {
+    pub fn types_to_check(&self) -> (Vec<Type>, Vec<Type>) {
         match self {
             // Ampersand (concat) always works because it'll coerce anything to a string.
             Self::Ampersand => (Vec::new(), Vec::new()),
-            Self::Plus => (vec![Type::Integer, Type::Real], vec![Type::Integer, Type::Real]),
-            
+            Self::Plus => (
+                vec![Type::Integer, Type::Real],
+                vec![Type::Integer, Type::Real],
+            ),
         }
     }
 
-    /// Types resulting from an operator.
-    pub fn result_type(&self) -> Type {
-        match self {
-            Self::Ampersand => Type::Array(Box::new(Type::Indeterminate)),
-            Self::Plus => Type::Integer,
+    /// TODO: explain
+    ///
+    /// # Errors
+    ///
+    /// The only error this function produces is [`TypeError::IncorrectOperatorType`].
+    pub fn check_and_join(&self, lhs: &Type, rhs: &Type, pos: Position) -> Result<Type, TypeError> {
+        match (self) {
+            Self::Ampersand => match (lhs, rhs) {
+                (Type::Array(b), _) | (_, Type::Array(b)) if matches!(**b, Type::Character) => {
+                    Ok(Type::Array(Box::new(Type::Character)))
+                }
+                _ => todo!(),
+            },
+            Self::Plus => {
+                let Some(joined) = lhs.join(rhs) else {
+                    return Err(TypeError::IncorrectBinOperatorType {
+                        op: self.clone(),
+                        expected: vec![Type::Integer, Type::Real],
+                        lhs: Box::new(lhs.clone()),
+                        rhs: Box::new(rhs.clone()),
+                        pos,
+                    });
+                };
+                if matches!(joined, Type::Integer | Type::Real) {
+                    Ok(joined)
+                } else {
+                    Err(TypeError::IncorrectBinOperatorType {
+                        op: self.clone(),
+                        expected: vec![Type::Integer, Type::Real],
+                        lhs: Box::new(lhs.clone()),
+                        rhs: Box::new(rhs.clone()),
+                        pos,
+                    })
+                }
+            }
         }
     }
 }

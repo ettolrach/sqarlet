@@ -74,8 +74,76 @@ pub enum Type {
     // Class(Id),
     /// A function with the types of the parameters and the output type.
     Function(Vec<Type>, Box<Type>),
-    /// An indeterminate type from a `RECEIVE id FROM <source>` expression.
-    Indeterminate,
+    // /// An indeterminate type from a `RECEIVE id FROM <source>` expression.
+    // Indeterminate,
+}
+
+impl Type {
+    pub fn rust_type(&self) -> String {
+        match self {
+            Type::Ftv(id) => id.to_string(),
+            Type::Unit => String::from("()"),
+            Type::Integer => String::from("i64"),
+            Type::Real => String::from("f64"),
+            Type::Boolean => String::from("bool"),
+            Type::Character => String::from("char"),
+            Type::Array(ty) => format!("Rc<RefCell<Vec<{ty}>>>"),
+            Type::Record(id, _) => id.to_string(),
+            Type::Function(_, _) => unimplemented!("Should never be called."),
+            // Type::Indeterminate => String::from("_"),
+        }
+    }
+
+    /// Find a common type between `self` and `other`.
+    ///
+    /// Note: no subtyping is checked here. If subtyping is important, consider using
+    /// [`is_subtype_of`].
+    ///
+    /// [`is_subtype_of`]: Self::is_subtype_of
+    pub fn join(&self, other: &Type) -> Option<Type> {
+        if self == other {
+            return Some(self.clone());
+        }
+        match (self, other) {
+            (Type::Integer, Type::Real) | (Type::Real, Type::Integer) => Some(Type::Real),
+            // (Type::Array(b), _) | (_, Type::Array(b)) if matches!(**b, Type::Character) =>
+            //     Some(Type::Array(Box::new(Type::Character))),
+            _ => None,
+        }
+    }
+
+    /// Is `self` a subtype of `other`? Currently, this should only ever be used to check if we're
+    /// promoting an INTEGER to a REAL.
+    pub fn is_subtype_of(&self, other: &Type) -> bool {
+        // subtyping is reflexive.
+        if self == other {
+            return true;
+        }
+        match other {
+            // in theory, we shouldn't ever come across `Unit` in the wild since it's not an actual
+            // type in the spec. this should be sound! but maybe this buggy. who's to say.
+            Type::Unit => true,
+            Type::Real if self == &Type::Integer => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_subtype_with_coercion(&self, other: &Type) -> Option<Coercion> {
+        // subtyping is reflexive.
+        if self == other {
+            return Some(Coercion::Refl);
+        }
+        match other {
+            Type::Real if self == &Type::Integer => Some(Coercion::IntegerToReal),
+            // here we don't have `Unit` because that should never occur in code.
+            _ => None,
+        }
+    }
+
+    /// Is this type an ARRAY OF <arbitrary type>?
+    pub fn is_array(&self) -> bool {
+        matches!(self, Type::Array(..))
+    }
 }
 
 impl Display for Type {
@@ -91,7 +159,7 @@ impl Display for Type {
             Type::Record(id, fields) => write!(f, "{id} {{ {} }}", print_fields(fields)),
             // Type::Class(id) => write!(f, "{id} (CLASS)"),
             Type::Function(from, to) => write!(f, "FUNCTION ({}) RETURNS {to}", print_types(from)),
-            Type::Indeterminate => write!(f, "INDETERMINATE TYPE"),
+            // Type::Indeterminate => write!(f, "INDETERMINATE TYPE"),
         }
     }
 }
@@ -113,23 +181,6 @@ impl From<Literal> for Type {
     }
 }
 
-impl Type {
-    pub fn rust_type(&self) -> String {
-        match self {
-            Type::Ftv(id) => id.to_string(),
-            Type::Unit => String::from("()"),
-            Type::Integer => String::from("i64"),
-            Type::Real => String::from("f64"),
-            Type::Boolean => String::from("bool"),
-            Type::Character => String::from("char"),
-            Type::Array(ty) => format!("Rc<RefCell<Vec<{ty}>>>"),
-            Type::Record(id, _) => id.to_string(),
-            Type::Function(_, _) => unimplemented!("Should never be called."),
-            Type::Indeterminate => String::from("_"),
-        }
-    }
-}
-
 impl From<Type> for VarType {
     fn from(value: Type) -> Self {
         match value {
@@ -142,32 +193,41 @@ impl From<Type> for VarType {
             Type::Array(_) => Self::RcRef,
             Type::Record(_, _) => Self::RcRef,
             Type::Function(_, _) => unimplemented!("Should never be called."),
-            Type::Indeterminate => todo!("TODO: figure out what type this should be"),
+            // Type::Indeterminate => todo!("TODO: figure out what type this should be"),
         }
     }
 }
 
 /// Write a nonempty slice into a [`std::fmt::Write`]able type.
-/// 
+///
 /// # Errors
-/// 
+///
 /// An error while writing occurred. For more info, see the 'Errors' section for the
 /// [`std::fmt::Write::write_str`] function.
 pub fn write_types(types: &[Type], w: &mut dyn std::fmt::Write) -> std::fmt::Result {
     match types {
         [] => Ok(()),
-        [ty] => {
-            w.write_str(ty.to_string().as_str())
-        }
+        [ty] => w.write_str(ty.to_string().as_str()),
         [x, xs @ ..] => {
-            w.write_str(x.to_string().as_str());
+            w.write_str(x.to_string().as_str())?;
             for ty in xs {
-                w.write_str(" or ");
-                w.write_str(ty.to_string().as_str());
+                w.write_str(" or ")?;
+                w.write_str(ty.to_string().as_str())?;
             }
             Ok(())
         }
     }
+}
+
+/// Valid coercions in the language.
+#[derive(Debug, Clone, Copy)]
+pub enum Coercion {
+    /// Reflexivity. Any type can be coerced to itself.
+    Refl,
+    /// INTEGER to REAL promotion.
+    IntegerToReal,
+    /// Any type can be coerced to a STRING.
+    AnyToString,
 }
 
 mod private {

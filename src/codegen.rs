@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::{
     typechecking::{TypecheckedExpr, TypedExprKind},
-    types::{Id, Type},
+    types::{Coercion, Id, Type},
 };
 
 #[derive(Default)]
@@ -37,6 +37,32 @@ impl Generator {
         env: &mut HashMap<Id, String>,
     ) -> String {
         match expr {
+            TypedExprKind::Coerced(coercion, e) => {
+                match coercion {
+                    // TODO: optimise when doing codegen.
+                    Coercion::Refl => self.generate(
+                        &TypecheckedExpr {
+                            expr: *e.clone(),
+                            position: Default::default(),
+                            ty: ty.clone(),
+                        },
+                        env,
+                    ),
+                    Coercion::IntegerToReal => {
+                        // TODO: optimise when doing codegen.
+                        let mut s = self.generate(
+                            &TypecheckedExpr {
+                                expr: *e.clone(),
+                                position: Default::default(),
+                                ty: Type::Integer,
+                            },
+                            env,
+                        );
+                        format!("({s}) as f64")
+                    }
+                    Coercion::AnyToString => todo!(),
+                }
+            }
             TypedExprKind::Fv(id) => {
                 if let Some(name) = env.get(id) {
                     name.clone()
@@ -215,7 +241,9 @@ pub fn generate_code(program: &[TypecheckedExpr]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        expr::{BinOperator, Expr, ExprKind, Literal, Stmt, StmtKind, ValueSource}, parse::Position, typechecking::typecheck_program,
+        expr::{BinOperator, Expr, ExprKind, Literal, Stmt, StmtKind, ValueSource},
+        parse::Position,
+        typechecking::typecheck_program,
     };
 
     use super::*;
