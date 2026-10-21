@@ -144,13 +144,12 @@ impl TypecheckedExpr {
 pub enum TypeError {
     /// Array elemnts have different types.
     #[error(
-        "Array elements weren't all of the same type. Expected {ty} but the element at index {index} was {bad_ty} and didn't match, at {pos}"
+        "Array elements weren't all of the same type. Expected {ty} but the element index {index} was {bad_ty} and couldn't be coerced to {ty}, at {pos}"
     )]
     ArrayElemsDifferingTypes {
         ty: Box<Type>,
         index: usize,
         bad_ty: Box<Type>,
-        bad_position: Position,
         pos: Position,
     },
     /// An IF, WHILE, or UNTIL expression was not a boolean.
@@ -230,6 +229,58 @@ pub enum TypeError {
     UndefinedVariable(Id, Position),
 }
 
+/// Find the common supertype between the expressions, apply any coercions required to get each
+/// element to the common supertype, and return the resulting type.
+fn arr_join_and_coerce(exprs: Vec<TypecheckedExpr>) -> Result<(Type, Vec<TypecheckedExpr>), TypeError> {
+    if exprs.is_empty() {
+        todo!("tried to join an empty array, TODO: make nonempty slice type to avoid this case.");
+    }
+
+    // first, find the common supertype.
+    let common_supertype = zip(1.., exprs[1..].iter()).try_fold(&exprs[0].ty, |acc, (index, e)| {
+        if acc.is_subtype_of(&e.ty) {
+            Ok(&e.ty)
+        } else if e.ty.is_subtype_of(acc) {
+            Ok(acc)
+        } else {
+            Err(TypeError::ArrayElemsDifferingTypes {
+                ty: Box::new(acc.clone()),
+                index,
+                bad_ty: Box::new(e.ty.to_owned()),
+                pos: e.position,
+            })
+        }
+    })?.to_owned();
+
+    // now, work out the coercions needed to get each element to the common supertype.
+    let coerced_exprs = exprs.into_iter().map(|e| {
+        // we might not need to do anything if the element is already of the appropriate type.
+        if e.ty == common_supertype {
+            return e;
+        }
+
+        // we need to make a chain of supertypes.
+        let coercions: Vec<Coercion> = Vec::new();
+        let mut current_type = e.ty.clone();
+        let mut e = e;
+        // will run at least once because we checked for equality above.
+        while current_type != common_supertype {
+            current_type = current_type
+                .supertype()
+                .expect("we know we can make a chain because we already made it above.");
+
+            let coercion = e
+                .ty
+                .is_subtype_with_coercion(&current_type)
+                .expect("`current_type` must be a supertype");
+            e = TypecheckedExpr::new(TypedExprKind::Coerced(coercion, Box::new(e.expr)), e.position, common_supertype.clone())
+        }
+        e
+    }).collect();
+
+    Ok((common_supertype, coerced_exprs))
+}
+
 pub(crate) fn infer(
     expr: Expr,
     context: &mut HashMap<Id, Type>,
@@ -261,35 +312,10 @@ pub(crate) fn infer(
             // `infer_exprs` shouldn't change the length.
             let first_type = inferred_exprs[0].ty.clone();
 
-            let joined_ty: Type = zip(1usize.., &inferred_exprs[1..]).try_fold(
-                first_type.clone(),
-                |acc, (index, e)| {
-                    // TODO: apply coercions here too.
-                    acc.join(&e.ty)
-                        .ok_or_else(|| TypeError::ArrayElemsDifferingTypes {
-                            ty: Box::new(acc.clone()),
-                            index,
-                            bad_ty: Box::new(e.ty.to_owned()),
-                            bad_position: e.position,
-                            pos: expr.position,
-                        })
-                },
-            )?;
+            let (joined_ty, coerced_exprs) = arr_join_and_coerce(inferred_exprs)?;
 
-            // Check that all other elements have the same type.
-            // for (index, e) in zip(1usize.., &inferred_exprs[1..]) {
-            //     if e.ty != first_type {
-            //         return Err(TypeError::ArrayElemsDifferingTypes {
-            //             ty: Box::new(first_type),
-            //             index,
-            //             bad_ty: Box::new(e.ty.clone()),
-            //             bad_position: e.position,
-            //             pos: expr.position,
-            //         });
-            //     }
-            // }
             Ok(TypecheckedExpr::new(
-                TypedExprKind::Array(inferred_exprs),
+                TypedExprKind::Array(coerced_exprs),
                 expr.position,
                 Type::Array(Box::new(joined_ty)),
             ))

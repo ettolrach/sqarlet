@@ -94,6 +94,13 @@ impl Type {
         }
     }
 
+    pub fn supertype(&self) -> Option<Type> {
+        match self {
+            Type::Integer => Some(Type::Real),
+            _ => None,
+        }
+    }
+
     /// Find a common type between `self` and `other`.
     ///
     /// Note: no subtyping is checked here. If subtyping is important, consider using
@@ -128,6 +135,8 @@ impl Type {
         }
     }
 
+    /// Checks if `self` is a subtype of `other`. If not, then returns [`None`]. If so, returns
+    /// [`Some`] with the coercion required to get from `self` to `other`.
     pub fn is_subtype_with_coercion(&self, other: &Type) -> Option<Coercion> {
         // subtyping is reflexive.
         if self == other {
